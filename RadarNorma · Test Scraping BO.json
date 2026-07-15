@@ -1,0 +1,298 @@
+{
+  "name": "RadarNorma · Test Scraping BO",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const hoy = new Date();\nconst ayer = new Date(hoy);\nayer.setDate(ayer.getDate() - 1);\n\nif (ayer.getDay() === 0) ayer.setDate(ayer.getDate() - 2);\nif (ayer.getDay() === 6) ayer.setDate(ayer.getDate() - 1);\n\nconst yyyy = ayer.getFullYear();\nconst mm = String(ayer.getMonth() + 1).padStart(2, '0');\nconst dd = String(ayer.getDate()).padStart(2, '0');\nconst fecha = `${yyyy}${mm}${dd}`;\n\nconst staticData = $getWorkflowStaticData('global');\n\nif (staticData.ultimaFechaProcesada === fecha) {\n  throw new Error(`El BO del ${dd}/${mm}/${yyyy} ya fue procesado hoy. No se vuelve a ejecutar.`);\n}\n\nstaticData.ultimaFechaProcesada = fecha;\n\nreturn [{\n  json: {\n    fecha_hoy: fecha,\n    url_listado: `https://www.boletinoficial.gob.ar/seccion/primera/${fecha}`\n  }\n}];"
+      },
+      "id": "3f7c3313-9854-49e6-b6a9-71738384e23c",
+      "name": "Calcular Fecha",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url_listado }}",
+        "options": {}
+      },
+      "id": "c3f7cbfd-f3bc-4f4b-88e1-3c0148f86f59",
+      "name": "Fetch Listado BO",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        464,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item.json;\nlet html = '';\n\nif (typeof item === 'string') {\n  html = item;\n} else if (typeof item.data === 'string') {\n  html = item.data;\n} else {\n  html = JSON.stringify(item);\n}\n\nif (html.length < 500) {\n  throw new Error('HTML demasiado corto. Largo: ' + html.length);\n}\n\nconst ORGANISMOS_RELEVANTES = [\n  'AGENCIA DE RECAUDACIÓN Y CONTROL ADUANERO',\n  'ADUANERO', 'ADUANA',\n  'BANCO CENTRAL',\n  'MINISTERIO DE ECONOMÍA',\n  'HACIENDA', 'FINANZAS',\n  'SECRETARÍA DE COMERCIO', 'COMERCIO INTERIOR', 'COMERCIO EXTERIOR',\n  'ANSES', 'SEGURIDAD SOCIAL',\n  'MINISTERIO DE TRABAJO', 'MINISTERIO DE CAPITAL HUMANO',\n  'SUPERINTENDENCIA DE SEGUROS',\n  'SUPERINTENDENCIA DE RIESGOS DEL TRABAJO', 'RIESGOS DEL TRABAJO',\n  'COMISIÓN NACIONAL DE VALORES'\n];\n\nfunction extraerNormas(htmlInput, normasExistentes, vistas) {\n  const linkRegex = /<a\\s+href=\"(\\/detalleAviso\\/primera\\/(\\d+)\\/(\\d{8}))\"[^>]*>([\\s\\S]*?)<\\/a>/g;\n  let match;\n\n  while ((match = linkRegex.exec(htmlInput)) !== null) {\n    const url = match[1];\n    const id = match[2];\n    const fecha = match[3];\n    const contenido = match[4];\n\n    if (vistas.has(id)) continue;\n\n    const orgMatch = contenido.match(/<p class=\"item\">([^<]{3,})<\\/p>/);\n    const organismo = orgMatch ? orgMatch[1].trim() : '';\n\n    const esRelevante = ORGANISMOS_RELEVANTES.some(o =>\n      organismo.toUpperCase().includes(o)\n    );\n\n    if (!esRelevante) continue;\n\n    const smalls = [...contenido.matchAll(/<small>([^<]+)<\\/small>/g)].map(m => m[1].trim());\n\n    // Filtrar avisos oficiales genéricos (no tienen impacto fiscal)\n    const tituloCorto = smalls[0] || '';\n    if (tituloCorto === 'Aviso Oficial' || tituloCorto === '') continue;\n\n    vistas.add(id);\n\n    normasExistentes.push({\n      json: {\n        norma_id: id,\n        fecha: fecha,\n        organismo: organismo,\n        titulo_corto: tituloCorto,\n        descripcion: smalls[1] || '',\n        url: `https://www.boletinoficial.gob.ar${url}`\n      }\n    });\n  }\n}\n\n// Página 1: extraer del HTML inicial\nconst normas = [];\nconst vistas = new Set();\nextraerNormas(html, normas, vistas);\n\n// Extraer ultimoRubro del JavaScript de la página\nconst rubroMatch = html.match(/var\\s+ultimoRubro\\s*=\\s*'([^']+)'/);\nlet ultimoRubro = rubroMatch ? rubroMatch[1] : '';\n\n// Páginas 2 en adelante: usar la API de paginación\nlet hayMasDatos = true;\nlet pagina = 2;\nconst maxPaginas = 5;\n\nwhile (hayMasDatos && pagina <= maxPaginas && ultimoRubro) {\n  try {\n    const apiUrl = `https://www.boletinoficial.gob.ar/seccion/actualizar/primera?pag=${pagina}&ult_rubro=${encodeURIComponent(ultimoRubro)}`;\n    \n    const response = await this.helpers.httpRequest({\n      url: apiUrl,\n      method: 'GET',\n      json: true\n    });\n\n    if (response && response.html) {\n      extraerNormas(response.html, normas, vistas);\n    }\n\n    hayMasDatos = response && response.hay_mas_datos === true;\n    ultimoRubro = response && response.ult_rubro ? response.ult_rubro : '';\n    pagina++;\n  } catch (e) {\n    break;\n  }\n}\n\nif (normas.length === 0) {\n  throw new Error('No se encontraron normas relevantes en ninguna página.');\n}\n\nreturn normas;"
+      },
+      "id": "4673c7fd-ee88-4c66-8b00-831364145a63",
+      "name": "Extraer Links",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        912,
+        0
+      ],
+      "id": "e3b05eee-9dd5-432d-9044-9acac12e34a7",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const html = $input.item.json.data;\nconst extractNode = $('Extraer Links').item.json;\n\nconst cuerpoMatch = html.match(/id=\"cuerpoDetalleAviso\"[^>]*>([\\s\\S]*?)<\\/div>\\s*<\\/div>\\s*<\\/div>/);\n\nif (!cuerpoMatch) {\n  return { json: { error: 'No se encontró el cuerpo', norma_id: extractNode.norma_id } };\n}\n\nlet texto = cuerpoMatch[1]\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<img[^>]*>/gi, '')\n  .replace(/<table[\\s\\S]*?<\\/table>/gi, '[TABLA]')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&nbsp;/g, ' ')\n  .replace(/&amp;/g, '&')\n  .replace(/&lt;/g, '<')\n  .replace(/&gt;/g, '>')\n  .replace(/&quot;/g, '\"')\n  .replace(/&#x27;/g, \"'\")\n  .replace(/\\s+/g, ' ')\n  .trim();\n\nif (texto.length > 6000) {\n  texto = texto.substring(0, 6000) + '... [TEXTO TRUNCADO]';\n}\n\nreturn {\n  json: {\n    norma_id: extractNode.norma_id,\n    fecha: extractNode.fecha,\n    organismo: extractNode.organismo,\n    titulo_corto: extractNode.titulo_corto,\n    url: extractNode.url,\n    texto_norma: texto\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1136,
+        0
+      ],
+      "id": "261a2730-2df6-40a1-9675-0e63e454ce74",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=Analizá esta norma del Boletín Oficial argentino DESDE LA PERSPECTIVA DE UN ESTUDIO CONTABLE:\n\nOrganismo: {{ $json.organismo }}\nTítulo: {{ $json.titulo_corto }}\nTexto:\n{{ $json.texto_norma }}\n\nREGLAS ESTRICTAS:\n1. En \"impuestos_afectados\" incluí SOLAMENTE impuestos cuya obligación se MODIFICA concretamente (nueva alícuota, nuevo régimen, nuevo vencimiento, nuevo sujeto alcanzado). Si la norma solo MENCIONA un impuesto sin modificar nada, NO lo incluyas.\n2. En \"actividades_afectadas\" sé MUY ESPECÍFICO. No pongas \"transporte\" si la norma es sobre \"transporte automotor de pasajeros\". No pongas \"energía\" si es sobre \"bioetanol de caña de azúcar\".\n3. Si la norma no modifica ninguna obligación fiscal, contable, laboral o previsional concreta (ej: designaciones, permisos, acuerdos internacionales, licitaciones, estructura organizativa, fijación de precios sectoriales), la importancia DEBE ser \"nula\".\n4. Solo marcá importancia \"alta\" si cambia algo que el contador DEBE hacer distinto a partir de mañana.\n5. En \"vigencia\" indicá si la norma es operativa YA o si requiere pasos adicionales para entrar en vigencia.\n6. Si la norma aplica a un contribuyente específico nombrado (ej: \"DISCOVERY NETWORKS S.L.\", \"Rincón Mining PTY LTD\"), la importancia DEBE ser \"nula\". Solo son relevantes las normas de aplicación general.\n\nDevolvé ÚNICAMENTE un JSON válido con esta estructura:\n{\"organismo\":\"nombre\",\"tipo_norma\":\"Resolución|Decreto|Disposición\",\"numero\":\"número\",\"titulo\":\"título máx 120 chars\",\"resumen\":\"resumen ejecutivo 2-3 oraciones para un contador\",\"impuestos_afectados\":[\"solo impuestos cuya obligación se modifica\"],\"actividades_afectadas\":[\"actividades ESPECÍFICAS afectadas o vacío si es general\"],\"provincias_afectadas\":[\"todas si es nacional\"],\"tipo_contribuyente\":[\"los que apliquen de: responsable_inscripto, monotributista, gran_empresa, exento, todos\"],\"importancia\":\"alta|media|baja|nula\",\"vigencia\":\"inmediata|diferida (especificar fecha)|pendiente_reglamentacion\",\"cierre_ejercicio_afectado\":\"mes en número (1-12) si la norma aplica solo a ciertos cierres, o todos\",\"accion_sugerida\":\"qué debe hacer el contador, máx 150 chars. Si importancia es nula: Sin acción requerida\"}"
+            },
+            {
+              "role": "system",
+              "content": "Sos un asistente especializado en normativa fiscal y contable argentina. Analizás normas del Boletín Oficial y devolvés ÚNICAMENTE un objeto JSON válido, sin texto adicional, sin bloques de código."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1360,
+        0
+      ],
+      "id": "7769f8d8-4acc-41f7-89e7-b6e9a6eec157",
+      "name": "Message a model",
+      "credentials": {
+        "openAiApi": {
+          "id": "ysQUskcVMDNfqZtD",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst metaItems = $('Extraer Links').all();\n\n// Leer clientes desde Supabase\nconst SUPABASE_URL = 'https://imfruxezhadhpenkyhoo.supabase.co';\nconst SUPABASE_KEY = 'sb_publishable_vBOfVQzznPfSHqWhqarmdA_z6sF58sh';\n\nconst clientesRaw = await this.helpers.httpRequest({\n  url: `${SUPABASE_URL}/rest/v1/Clientes RadarNorma?select=*`,\n  method: 'GET',\n  headers: {\n    'apikey': SUPABASE_KEY,\n    'Authorization': `Bearer ${SUPABASE_KEY}`\n  },\n  json: true\n});\n\nconst clientes = clientesRaw.map(c => ({\n  cuit: c.cuit,\n  razon_social: c.razon_social,\n  actividad: c.actividad,\n  provincia: c.provincia,\n  impuestos: c.impuestos.split(',').map(i => i.trim()),\n  tipo: c.tipo,\n  cierre: parseInt(c.cierre) || 12\n}));\n\nconst normalizarImpuesto = (imp) => {\n  const lower = imp.toLowerCase();\n  if (lower.includes('ganancia')) return 'Ganancias';\n  if (lower.includes('iva') || lower.includes('valor agregado')) return 'IVA';\n  if (lower.includes('monotributo')) return 'Monotributo';\n  if (lower.includes('bienes personales')) return 'Bienes Personales';\n  if (lower.includes('ingresos brutos')) return 'IIBB';\n  if (lower.includes('seguridad social') || lower.includes('previsional')) return 'Seguridad Social';\n  if (lower.includes('sello')) return 'Sellos';\n  if (lower.includes('aduana') || lower.includes('arancel') || lower.includes('importación') || lower.includes('exportación')) return 'Aduana';\n  return imp;\n};\n\nconst notificaciones = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const meta = metaItems[i] ? metaItems[i].json : {};\n\n  let normaData;\n  try {\n    const llmText = item.json.output[0].content[0].text;\n    normaData = JSON.parse(llmText);\n  } catch (e) {\n    continue;\n  }\n\n  if (normaData.importancia === 'nula' ||\n      ((normaData.impuestos_afectados || []).length === 0 && \n       (normaData.importancia === 'baja' || normaData.importancia === 'media'))) {\n    continue;\n  }\n\n  // Filtrar normas de casos específicos\n  const resumenLower = (normaData.resumen || '').toLowerCase();\n  if (resumenLower.includes('interpuesto por') || resumenLower.includes('presentado por') || resumenLower.includes('solicitado por')) {\n    continue;\n  }\n\n  const clientesAfectados = [];\n\n  for (const cliente of clientes) {\n    let score = 0;\n    const motivos = [];\n\n    const impNormalizados = (normaData.impuestos_afectados || []).map(normalizarImpuesto);\n    const impComunes = impNormalizados.filter(imp => cliente.impuestos.includes(imp));\n    if (impComunes.length > 0) {\n      score += 3;\n      motivos.push(`Impuestos: ${impComunes.join(', ')}`);\n    }\n\n    const tipos = normaData.tipo_contribuyente || [];\n    if (tipos.includes('todos')) {\n      score += 2;\n      motivos.push(`Tipo: ${cliente.tipo}`);\n    } else if (tipos.includes(cliente.tipo)) {\n      score += 2;\n      motivos.push(`Tipo: ${cliente.tipo}`);\n    } else if (tipos.length > 0) {\n      continue; // La norma especifica tipos y este cliente no está incluido\n    }\n\n    const acts = normaData.actividades_afectadas || [];\n    if (acts.length > 0) {\n      const matchAct = acts.some(a =>\n        cliente.actividad.toLowerCase().includes(a.toLowerCase())\n      );\n      if (matchAct) {\n        score += 2;\n        motivos.push('Actividad relacionada');\n      }\n    }\n\n    const provs = normaData.provincias_afectadas || ['todas'];\n    if (!provs.includes('todas')) {\n      if (provs.includes(cliente.provincia)) {\n        score += 1;\n        motivos.push(`Provincia: ${cliente.provincia}`);\n      } else {\n        continue;\n      }\n    }\n\n    // Filtro por cierre de ejercicio\n    const cierreNorma = normaData.cierre_ejercicio_afectado;\n    if (cierreNorma && cierreNorma !== 'todos') {\n      const mesCierre = parseInt(cierreNorma);\n      if (mesCierre && cliente.cierre !== mesCierre) {\n        continue;\n      }\n    }\n\n    if (score >= 4) {\n      clientesAfectados.push({\n        nombre: cliente.razon_social,\n        cuit: cliente.cuit,\n        motivos: motivos.join(' | ')\n      });\n    }\n  }\n\n  if (clientesAfectados.length > 0) {\n    notificaciones.push({\n      json: {\n        norma_titulo: normaData.titulo || meta.titulo_corto || '',\n        norma_numero: normaData.numero || '',\n        norma_organismo: normaData.organismo || meta.organismo || '',\n        norma_resumen: normaData.resumen || '',\n        norma_importancia: normaData.importancia || '',\n        norma_url: meta.url || '',\n        accion_sugerida: normaData.accion_sugerida || '',\n        vigencia: normaData.vigencia || 'no especificada',\n        cantidad_clientes: clientesAfectados.length,\n        clientes_afectados: clientesAfectados\n      }\n    });\n  }\n}\n\nif (notificaciones.length === 0) {\n  return [{ json: { sin_matches: true, mensaje: 'Ninguna norma de hoy afecta a clientes del estudio' } }];\n}\n\nreturn notificaciones;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        0
+      ],
+      "id": "e96568f2-2970-4faa-b0d0-5da3a7e19429",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "chatId": "8699580772",
+        "text": "={{ $json.mensaje_telegram }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2160,
+        0
+      ],
+      "id": "6450186e-884a-40ca-af43-17115036a0e3",
+      "name": "Send a text message",
+      "webhookId": "951fcf0b-7200-47c2-b078-19eeba4abcc9",
+      "credentials": {
+        "telegramApi": {
+          "id": "bd3p7rqofpuofIlx",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst mensajes = [];\n\nfor (const item of items) {\n  const d = item.json;\n  \n  if (d.sin_matches) continue;\n\n  let listaClientes = '';\n  for (const c of d.clientes_afectados) {\n    listaClientes += `• ${c.nombre} (${c.cuit})\\n`;\n  }\n\n  const vigenciaTexto = d.vigencia ? `\\n⏰ <b>Vigencia:</b> ${d.vigencia}` : '';\n\n  const texto = `🔔 <b>RadarNorma — Nueva norma relevante</b>\n\n📄 <b>${d.norma_titulo}</b>\n🏛 ${d.norma_organismo}\n📋 ${d.norma_numero}\n⚡ Importancia: ${d.norma_importancia}${vigenciaTexto}\n\n📝 <b>Resumen:</b>\n${d.norma_resumen}\n\n✅ <b>Acción sugerida:</b>\n${d.accion_sugerida}\n\n👥 <b>Clientes alcanzados (${d.cantidad_clientes}):</b>\n${listaClientes}\n🔗 <a href=\"${d.norma_url}\">Ver norma completa</a>`;\n\n  mensajes.push({ json: { mensaje_telegram: texto } });\n}\n\nif (mensajes.length === 0) {\n  return [{ json: { mensaje_telegram: '✅ RadarNorma: No hay normas relevantes hoy.' } }];\n}\n\nreturn mensajes;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1936,
+        0
+      ],
+      "id": "ba53f14b-b9ec-4f81-a417-b779f1539d77",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1-5"
+            },
+            {}
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        16,
+        0
+      ],
+      "id": "7f7604c4-b542-4a6b-aade-d94661649595",
+      "name": "Schedule Trigger"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Calcular Fecha": {
+      "main": [
+        [
+          {
+            "node": "Fetch Listado BO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Listado BO": {
+      "main": [
+        [
+          {
+            "node": "Extraer Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer Links": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Calcular Fecha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "a5813a38-b1a5-433f-bf4e-c1ba46380f34",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "58e40d5a0080fc9fc6314d0f6c9860ce90929d46f6b1d96a579459420e411856"
+  },
+  "nodeGroups": [],
+  "id": "RsSIE41CO0A1sBf3",
+  "tags": []
+}

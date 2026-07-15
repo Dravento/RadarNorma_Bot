@@ -1,0 +1,385 @@
+{
+  "name": "RadarNorma - Onboarding Clientes",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "2d7d1d54-b919-4c76-9425-cc3855592566",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        16,
+        -16
+      ],
+      "webhookId": "4c3a14be-461f-4c88-9f24-fdbf4c1d8011",
+      "credentials": {
+        "telegramApi": {
+          "id": "bd3p7rqofpuofIlx",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "check-document",
+              "leftValue": "={{ $json.message.document.file_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b521a1ca-ba9b-44a9-9363-57be90a55cef",
+      "name": "¿Tiene archivo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        240,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "👋 ¡Hola! Soy RadarNorma.\n\nMandame un archivo Excel (.xlsx) con una columna llamada <b>CUIT</b> y cargo todos tus clientes automáticamente consultando ARCA.\n\nEl formato del CUIT puede ser cualquiera:\n- Con guiones: 30-71234567-9\n- Sin guiones: 30712345679\n- Solo números: 30712345679\n\nNo necesito ningún otro dato — el sistema obtiene todo solo desde ARCA: razón social, actividad, impuestos y provincia.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "5e15d669-194b-4a16-b695-193e90326643",
+      "name": "Enviar instrucciones",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        448,
+        144
+      ],
+      "webhookId": "70354ed8-6622-4bcf-92f6-b92afab22249",
+      "credentials": {
+        "telegramApi": {
+          "id": "bd3p7rqofpuofIlx",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/bot8855852673:AAH9N-wsMoYkc8aY5G1OwtycjjfHSeQETRY/getFile?file_id={{ $('Telegram Trigger').item.json.message.document.file_id }}",
+        "options": {}
+      },
+      "id": "f96a42ed-bb24-4082-9462-a51a07b6f584",
+      "name": "Obtener ruta del archivo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/file/bot8855852673:AAH9N-wsMoYkc8aY5G1OwtycjjfHSeQETRY/{{ $json.result.file_path }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "298b0bec-6a44-485c-98bb-47d0d4f3ce48",
+      "name": "Descargar Excel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "6cda7b7d-9c59-4a1d-826e-15c29f502838",
+      "name": "Leer Excel",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8094/api/ws/padron_a5/getPersona_v2",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "radarnorma2026"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"cuit\": \"23390978634\",\n  \"params\": { \"idPersona\": \"{{ $json.CUIT.toString().replace(/[^0-9]/g, '') }}\" }\n}",
+        "options": {}
+      },
+      "id": "6383b8d4-26d1-4297-a039-8e2ce167e45b",
+      "name": "Consultar ARCA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        -176
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const data = $input.item.json;\nif (!data.resultado || !data.resultado.personaReturn) {\n  return { json: { error: true, cuit: data.cuit || 'desconocido' } };\n}\nconst persona = data.resultado.personaReturn;\nconst general = persona.datosGenerales;\n\nconst razonSocial = general.tipoPersona === 'FISICA'\n  ? `${general.apellido} ${general.nombre}`\n  : general.razonSocial || '';\n\nconst provincia = general.domicilioFiscal?.descripcionProvincia || '';\nconst cierre = parseInt(general.mesCierre) || 12;\n\nconst normalizarImp = (imp) => {\n  const l = imp.toLowerCase();\n  if (l.includes('ganancia')) return 'Ganancias';\n  if (l.includes('valor agregado') || l.includes('iva')) return 'IVA';\n  if (l.includes('monotributo')) return 'Monotributo';\n  if (l.includes('bienes personales')) return 'Bienes Personales';\n  if (l.includes('seguridad social') || l.includes('empleador')) return 'Seguridad Social';\n  if (l.includes('ingresos brutos') || l.includes('iibb')) return 'IIBB';\n  if (l.includes('aduana')) return 'Aduana';\n  return null;\n};\n\nconst impuestosRaw = [];\n\nif (persona.datosMonotributo?.impuesto) {\n  const imp = persona.datosMonotributo.impuesto;\n  if (Array.isArray(imp)) imp.forEach(i => impuestosRaw.push(i.descripcionImpuesto));\n  else impuestosRaw.push(imp.descripcionImpuesto);\n}\n\nif (persona.datosRegimenGeneral?.impuesto) {\n  const imp = persona.datosRegimenGeneral.impuesto;\n  if (Array.isArray(imp)) imp.forEach(i => impuestosRaw.push(i.descripcionImpuesto));\n  else impuestosRaw.push(imp.descripcionImpuesto);\n}\n\nconst impuestos = [...new Set(impuestosRaw.map(normalizarImp).filter(Boolean))];\n\nlet tipo = 'responsable_inscripto';\nif (impuestos.includes('Monotributo')) tipo = 'monotributista';\n\nconst actividad = persona.datosMonotributo?.actividad?.descripcionActividad\n  || persona.datosRegimenGeneral?.actividad?.descripcionActividad\n  || '';\n\nreturn {\n  json: {\n    cuit: general.idPersona,\n    razon_social: razonSocial.trim(),\n    actividad: actividad,\n    provincia: provincia,\n    impuestos: impuestos.join(', '),\n    tipo: tipo,\n    cierre: cierre\n  }\n};"
+      },
+      "id": "c5f49b95-d9e6-44b2-ad1c-7a467cf0b41b",
+      "name": "Parsear datos ARCA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://imfruxezhadhpenkyhoo.supabase.co/rest/v1/Clientes%20RadarNorma?on_conflict=cuit",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "sb_publishable_vBOfVQzznPfSHqWhqarmdA_z6sF58sh"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer sb_publishable_vBOfVQzznPfSHqWhqarmdA_z6sF58sh"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"cuit\": \"{{ $json.cuit }}\",\n  \"razon_social\": \"{{ $json.razon_social }}\",\n  \"actividad\": \"{{ $json.actividad || '' }}\",\n  \"provincia\": \"{{ $json.provincia || '' }}\",\n  \"impuestos\": \"{{ $json.impuestos || '' }}\",\n  \"tipo\": \"{{ $json.tipo || 'responsable_inscripto' }}\",\n  \"cierre\": \"{{ $json.cierre || 12 }}\"\n}",
+        "options": {}
+      },
+      "id": "85c7c7ff-3165-4600-a049-86f60d42186b",
+      "name": "Guardar en Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1552,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "✅ Clientes cargados correctamente desde ARCA.\n\nDesde mañana a las 9 AM vas a recibir las novedades del Boletín Oficial que afecten a tus clientes.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "e71879a9-ab9c-4af4-9652-d16b32ce2075",
+      "name": "Confirmar carga",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1984,
+        -176
+      ],
+      "webhookId": "5eb2db49-99a6-4ad2-9c74-03dfcdb77333",
+      "credentials": {
+        "telegramApi": {
+          "id": "bd3p7rqofpuofIlx",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {}
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        -176
+      ],
+      "id": "4a804c83-c4c0-486c-9eeb-a62cc2ded3df",
+      "name": "Aggregate",
+      "executeOnce": true
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "¿Tiene archivo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Tiene archivo?": {
+      "main": [
+        [
+          {
+            "node": "Obtener ruta del archivo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Enviar instrucciones",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener ruta del archivo": {
+      "main": [
+        [
+          {
+            "node": "Descargar Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar Excel": {
+      "main": [
+        [
+          {
+            "node": "Leer Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer Excel": {
+      "main": [
+        [
+          {
+            "node": "Consultar ARCA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar ARCA": {
+      "main": [
+        [
+          {
+            "node": "Parsear datos ARCA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear datos ARCA": {
+      "main": [
+        [
+          {
+            "node": "Guardar en Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar en Supabase": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Confirmar carga",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "b2276d54-8992-4a18-957d-14c41d9e7a54",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "58e40d5a0080fc9fc6314d0f6c9860ce90929d46f6b1d96a579459420e411856"
+  },
+  "nodeGroups": [],
+  "id": "26YPVtQ8mR8N597H",
+  "tags": []
+}
