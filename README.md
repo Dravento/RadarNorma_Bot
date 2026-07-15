@@ -167,6 +167,6 @@ El archivo `plantillas/clientes_radarnorma.xlsx` contiene el formato esperado pa
 
 ## Contexto académico
 
-Este proyecto fue desarrollado como Trabajo Final Integrador de la **Diplomatura en Diseño de Procesos de Negocios con Plataformas Visuales de Automatización e IA Agéntica** — FCE-UBA, Cohorte 2026, bajo la instrucción del Prof. Diego Parrás.
+Este proyecto fue desarrollado como Trabajo Final Integrador de la **Diplomatura en Diseño de Procesos de Negocios con Plataformas Visuales de Automatización e IA Agéntica** — FCE-UBA, bajo la instrucción del Prof. Diego Parrás.
 
 El proceso automatizado reemplaza una tarea manual de 30-60 minutos diarios por un ciclo automatizado de 3-5 minutos, con notificaciones personalizadas por cliente y trazabilidad completa de cada norma analizada.
